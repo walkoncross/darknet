@@ -88,7 +88,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>..\..\3rdparty\include;%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir);$(cudnn)\include</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_MBCS;YOLODLL_EXPORTS;_TIMESPEC_DEFINED;_CRT_SECURE_NO_WARNINGS;GPU;WIN32;NDEBUG;_CONSOLE;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;YOLODLL_EXPORTS;_TIMESPEC_DEFINED;_CRT_SECURE_NO_WARNINGS;WIN32;NDEBUG;_CONSOLE;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UndefinePreprocessorDefinitions>CUDNN</UndefinePreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
@@ -202,6 +202,7 @@
     <ClCompile Include="..\..\src\parser.c" />
     <ClCompile Include="..\..\src\region_layer.c" />
     <ClCompile Include="..\..\src\reorg_layer.c" />
+    <ClCompile Include="..\..\src\reorg_old_layer.c" />
     <ClCompile Include="..\..\src\rnn.c" />
     <ClCompile Include="..\..\src\rnn_layer.c" />
     <ClCompile Include="..\..\src\rnn_vid.c" />
@@ -256,6 +257,7 @@
     <ClInclude Include="..\..\src\parser.h" />
     <ClInclude Include="..\..\src\region_layer.h" />
     <ClInclude Include="..\..\src\reorg_layer.h" />
+    <ClInclude Include="..\..\src\reorg_old_layer.h" />
     <ClInclude Include="..\..\src\rnn_layer.h" />
     <ClInclude Include="..\..\src\route_layer.h" />
     <ClInclude Include="..\..\src\shortcut_layer.h" />

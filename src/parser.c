@@ -24,6 +24,7 @@
 #include "parser.h"
 #include "region_layer.h"
 #include "reorg_layer.h"
+#include "reorg_old_layer.h"
 #include "rnn_layer.h"
 #include "route_layer.h"
 #include "shortcut_layer.h"
@@ -60,6 +61,7 @@ LAYER_TYPE string_to_layer_type(char * type)
     if (strcmp(type, "[max]")==0
             || strcmp(type, "[maxpool]")==0) return MAXPOOL;
     if (strcmp(type, "[reorg]")==0) return REORG;
+	if (strcmp(type, "[reorg_old]") == 0) return REORG_OLD;
     if (strcmp(type, "[avg]")==0
             || strcmp(type, "[avgpool]")==0) return AVGPOOL;
     if (strcmp(type, "[dropout]")==0) return DROPOUT;
@@ -238,15 +240,18 @@ layer parse_region(list *options, size_params params)
     int coords = option_find_int(options, "coords", 4);
     int classes = option_find_int(options, "classes", 20);
     int num = option_find_int(options, "num", 1);
+	int max_boxes = option_find_int_quiet(options, "max", 30);
 
-    layer l = make_region_layer(params.batch, params.w, params.h, num, classes, coords);
+    layer l = make_region_layer(params.batch, params.w, params.h, num, classes, coords, max_boxes);
     assert(l.outputs == params.inputs);
 
     l.log = option_find_int_quiet(options, "log", 0);
     l.sqrt = option_find_int_quiet(options, "sqrt", 0);
 
+	l.small_object = option_find_int_quiet(options, "small_object", 0);
     l.softmax = option_find_int(options, "softmax", 0);
-    l.max_boxes = option_find_int_quiet(options, "max",30);
+	l.focal_loss = option_find_int_quiet(options, "focal_loss", 0);
+    //l.max_boxes = option_find_int_quiet(options, "max",30);
     l.jitter = option_find_float(options, "jitter", .2);
     l.rescore = option_find_int_quiet(options, "rescore",0);
 
@@ -354,6 +359,23 @@ layer parse_reorg(list *options, size_params params)
 
     layer layer = make_reorg_layer(batch,w,h,c,stride,reverse);
     return layer;
+}
+
+layer parse_reorg_old(list *options, size_params params)
+{
+	printf("\n reorg_old \n");
+	int stride = option_find_int(options, "stride", 1);
+	int reverse = option_find_int_quiet(options, "reverse", 0);
+
+	int batch, h, w, c;
+	h = params.h;
+	w = params.w;
+	c = params.c;
+	batch = params.batch;
+	if (!(h && w && c)) error("Layer before reorg layer must output image.");
+
+	layer layer = make_reorg_old_layer(batch, w, h, c, stride, reverse);
+	return layer;
 }
 
 maxpool_layer parse_maxpool(list *options, size_params params)
@@ -532,6 +554,7 @@ void parse_net_options(list *options, network *net)
     net->saturation = option_find_float_quiet(options, "saturation", 1);
     net->exposure = option_find_float_quiet(options, "exposure", 1);
     net->hue = option_find_float_quiet(options, "hue", 0);
+	net->power = option_find_float_quiet(options, "power", 4);
 
     if(!net->inputs && !(net->h && net->w && net->c)) error("No input parameters supplied");
 
@@ -571,7 +594,7 @@ void parse_net_options(list *options, network *net)
         net->gamma = option_find_float(options, "gamma", 1);
         net->step = option_find_int(options, "step", 1);
     } else if (net->policy == POLY || net->policy == RANDOM){
-        net->power = option_find_float(options, "power", 1);
+        //net->power = option_find_float(options, "power", 1);
     }
     net->max_batches = option_find_int(options, "max_batches", 0);
 }
@@ -583,6 +606,11 @@ int is_network(section *s)
 }
 
 network parse_network_cfg(char *filename)
+{
+	return parse_network_cfg_custom(filename, 0);
+}
+
+network parse_network_cfg_custom(char *filename, int batch)
 {
     list *sections = read_cfg(filename);
     node *n = sections->front;
@@ -600,6 +628,7 @@ network parse_network_cfg(char *filename)
     params.w = net.w;
     params.c = net.c;
     params.inputs = net.inputs;
+	if (batch > 0) net.batch = batch;
     params.batch = net.batch;
     params.time_steps = net.time_steps;
     params.net = net;
@@ -648,7 +677,9 @@ network parse_network_cfg(char *filename)
         }else if(lt == MAXPOOL){
             l = parse_maxpool(options, params);
         }else if(lt == REORG){
-            l = parse_reorg(options, params);
+            l = parse_reorg(options, params);		}
+		else if (lt == REORG_OLD) {
+			l = parse_reorg_old(options, params);
         }else if(lt == AVGPOOL){
             l = parse_avgpool(options, params);
         }else if(lt == ROUTE){
@@ -666,6 +697,8 @@ network parse_network_cfg(char *filename)
         }else{
             fprintf(stderr, "Type not recognized: %s\n", s->type);
         }
+        l.onlyforward = option_find_int_quiet(options, "onlyforward", 0);
+        l.stopbackward = option_find_int_quiet(options, "stopbackward", 0);
         l.dontload = option_find_int_quiet(options, "dontload", 0);
         l.dontloadscales = option_find_int_quiet(options, "dontloadscales", 0);
         option_unused(options);
@@ -698,6 +731,8 @@ network parse_network_cfg(char *filename)
     }
     return net;
 }
+
+
 
 list *read_cfg(char *filename)
 {
@@ -1025,12 +1060,14 @@ void load_weights_upto(network *net, char *filename, int cutoff)
     fread(&minor, sizeof(int), 1, fp);
     fread(&revision, sizeof(int), 1, fp);
 	if ((major * 10 + minor) >= 2) {
-		fread(net->seen, sizeof(uint64_t), 1, fp);
+		printf("\n seen 64 \n");
+		uint64_t iseen = 0;
+		fread(&iseen, sizeof(uint64_t), 1, fp);
+		*net->seen = iseen;
 	}
 	else {
-		int iseen = 0;
-		fread(&iseen, sizeof(int), 1, fp);
-		*net->seen = iseen;
+		printf("\n seen 32 \n");
+		fread(net->seen, sizeof(int), 1, fp);
 	}
     int transpose = (major > 1000) || (minor > 1000);
 

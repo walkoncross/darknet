@@ -35,7 +35,7 @@ void smooth_l1_cpu(int n, float *pred, float *truth, float *delta, float *error)
 void l2_cpu(int n, float *pred, float *truth, float *delta, float *error);
 void weighted_sum_cpu(float *a, float *b, float *s, int num, float *c);
 
-void softmax(float *input, int n, float temp, float *output);
+void softmax(float *input, int n, float temp, float *output, int stride);
 
 #ifdef GPU
 #include "cuda.h"
@@ -80,6 +80,7 @@ void reorg_ongpu(float *x, int w, int h, int c, int batch, int stride, int forwa
 
 void softmax_gpu(float *input, int n, int offset, int groups, float temp, float *output);
 void adam_gpu(int n, float *x, float *m, float *v, float B1, float B2, float rate, float eps, int t);
+void adam_update_gpu(float *w, float *d, float *m, float *v, float B1, float B2, float eps, float decay, float rate, int n, int batch, int t);
 
 void flatten_ongpu(float *x, int spatial, int layers, int batch, int forward, float *out);
 

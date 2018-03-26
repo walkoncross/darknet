@@ -50,6 +50,7 @@ float get_current_rate(network net)
     int batch_num = get_current_batch(net);
     int i;
     float rate;
+	if (batch_num < net.burn_in) return net.learning_rate * pow((float)batch_num / net.burn_in, net.power);
     switch (net.policy) {
         case CONSTANT:
             return net.learning_rate;
@@ -66,8 +67,9 @@ float get_current_rate(network net)
         case EXP:
             return net.learning_rate * pow(net.gamma, batch_num);
         case POLY:
-            if (batch_num < net.burn_in) return net.learning_rate * pow((float)batch_num / net.burn_in, net.power);
-            return net.learning_rate * pow(1 - (float)batch_num / net.max_batches, net.power);
+			return net.learning_rate * pow(1 - (float)batch_num / net.max_batches, net.power);
+            //if (batch_num < net.burn_in) return net.learning_rate * pow((float)batch_num / net.burn_in, net.power);
+            //return net.learning_rate * pow(1 - (float)batch_num / net.max_batches, net.power);
         case RANDOM:
             return net.learning_rate * pow(rand_uniform(0,1), net.power);
         case SIG:
@@ -138,6 +140,11 @@ network make_network(int n)
     #ifdef GPU
     net.input_gpu = calloc(1, sizeof(float *));
     net.truth_gpu = calloc(1, sizeof(float *));
+
+	net.input16_gpu = calloc(1, sizeof(float *));
+	net.output16_gpu = calloc(1, sizeof(float *));
+	net.max_input16_size = calloc(1, sizeof(size_t));
+	net.max_output16_size = calloc(1, sizeof(size_t));
     #endif
     return net;
 }
@@ -218,6 +225,7 @@ void backward_network(network net, network_state state)
             state.delta = prev.delta;
         }
         layer l = net.layers[i];
+        if (l.stopbackward) break;
         l.backward(l, state);
     }
 }
@@ -313,7 +321,20 @@ void set_batch_network(network *net, int b)
         net->layers[i].batch = b;
 #ifdef CUDNN
         if(net->layers[i].type == CONVOLUTIONAL){
-            cudnn_convolutional_setup(net->layers + i);
+			cudnn_convolutional_setup(net->layers + i, cudnn_fastest);
+			/*
+			layer *l = net->layers + i;
+            cudnn_convolutional_setup(l, cudnn_fastest);
+			// check for excessive memory consumption 
+			size_t free_byte;
+			size_t total_byte;
+			check_error(cudaMemGetInfo(&free_byte, &total_byte));
+			if (l->workspace_size > free_byte || l->workspace_size >= total_byte / 2) {
+				printf(" used slow CUDNN algo without Workspace! \n");
+				cudnn_convolutional_setup(l, cudnn_smallest);
+				l->workspace_size = get_workspace_size(*l);
+			}
+			*/
         }
 #endif
     }
@@ -325,6 +346,12 @@ int resize_network(network *net, int w, int h)
     cuda_set_device(net->gpu_index);
     if(gpu_index >= 0){
         cuda_free(net->workspace);
+		if (net->input_gpu) {
+			cuda_free(*net->input_gpu);
+			*net->input_gpu = 0;
+			cuda_free(*net->truth_gpu);
+			*net->truth_gpu = 0;
+		}
     }
 #endif
     int i;
@@ -337,6 +364,7 @@ int resize_network(network *net, int w, int h)
     //fflush(stderr);
     for (i = 0; i < net->n; ++i){
         layer l = net->layers[i];
+		//printf(" %d: layer = %d,", i, l.type);
         if(l.type == CONVOLUTIONAL){
             resize_convolutional_layer(&l, w, h);
         }else if(l.type == CROP){
@@ -347,6 +375,8 @@ int resize_network(network *net, int w, int h)
             resize_region_layer(&l, w, h);
         }else if(l.type == ROUTE){
             resize_route_layer(&l, net);
+		}else if (l.type == SHORTCUT) {
+			resize_shortcut_layer(&l, w, h);
         }else if(l.type == REORG){
             resize_reorg_layer(&l, w, h);
         }else if(l.type == AVGPOOL){
@@ -356,6 +386,7 @@ int resize_network(network *net, int w, int h)
         }else if(l.type == COST){
             resize_cost_layer(&l, inputs);
         }else{
+			fprintf(stderr, "Resizing type %d \n", (int)l.type);
             error("Cannot resize this type of layer");
         }
         if(l.workspace_size > workspace_size) workspace_size = l.workspace_size;
@@ -367,13 +398,9 @@ int resize_network(network *net, int w, int h)
     }
 #ifdef GPU
     if(gpu_index >= 0){
-        if(net->input_gpu) {
-            cuda_free(*net->input_gpu);
-            *net->input_gpu = 0;
-            cuda_free(*net->truth_gpu);
-            *net->truth_gpu = 0;
-        }
+		printf(" try to allocate workspace = %zu * sizeof(float), ", (workspace_size - 1) / sizeof(float) + 1);
         net->workspace = cuda_make_array(0, (workspace_size-1)/sizeof(float)+1);
+		printf(" CUDA allocate done! \n");
     }else {
         free(net->workspace);
         net->workspace = calloc(1, workspace_size);
@@ -602,6 +629,13 @@ void free_network(network net)
 	if (*net.truth_gpu) cuda_free(*net.truth_gpu);
 	if (net.input_gpu) free(net.input_gpu);
 	if (net.truth_gpu) free(net.truth_gpu);
+
+	if (*net.input16_gpu) cuda_free(*net.input16_gpu);
+	if (*net.output16_gpu) cuda_free(*net.output16_gpu);
+	if (net.input16_gpu) free(net.input16_gpu);
+	if (net.output16_gpu) free(net.output16_gpu);
+	if (net.max_input16_size) free(net.max_input16_size);
+	if (net.max_output16_size) free(net.max_output16_size);
 #else
 	free(net.workspace);
 #endif

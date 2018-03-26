@@ -22,7 +22,16 @@ extern "C" {
 
 #define FRAMES 3
 
-struct detector_gpu_t{
+#ifdef GPU
+void check_cuda(cudaError_t status) {
+	if (status != cudaSuccess) {
+		const char *s = cudaGetErrorString(status);
+		printf("CUDA Error Prev: %s\n", s);
+	}
+}
+#endif
+
+struct detector_gpu_t {
 	float **probs;
 	box *boxes;
 	network net;
@@ -33,33 +42,35 @@ struct detector_gpu_t{
 	unsigned int *track_id;
 };
 
-
-YOLODLL_API Detector::Detector(std::string cfg_filename, std::string weight_filename, int gpu_id)
+YOLODLL_API Detector::Detector(std::string cfg_filename, std::string weight_filename, int gpu_id) : cur_gpu_id(gpu_id)
 {
+	wait_stream = 0;
 	int old_gpu_index;
 #ifdef GPU
-	cudaGetDevice(&old_gpu_index);
+	check_cuda( cudaGetDevice(&old_gpu_index) );
 #endif
 
 	detector_gpu_ptr = std::make_shared<detector_gpu_t>();
-	detector_gpu_t &detector_gpu = *reinterpret_cast<detector_gpu_t *>(detector_gpu_ptr.get());
+	detector_gpu_t &detector_gpu = *static_cast<detector_gpu_t *>(detector_gpu_ptr.get());
 
 #ifdef GPU
-	cudaSetDevice(gpu_id);
+	//check_cuda( cudaSetDevice(cur_gpu_id) );
+	cuda_set_device(cur_gpu_id);
+	printf(" Used GPU %d \n", cur_gpu_id);
 #endif
 	network &net = detector_gpu.net;
-	net.gpu_index = gpu_id;
+	net.gpu_index = cur_gpu_id;
 	//gpu_index = i;
 	
 	char *cfgfile = const_cast<char *>(cfg_filename.data());
 	char *weightfile = const_cast<char *>(weight_filename.data());
 
-	net = parse_network_cfg(cfgfile);
+	net = parse_network_cfg_custom(cfgfile, 1);
 	if (weightfile) {
 		load_weights(&net, weightfile);
 	}
 	set_batch_network(&net, 1);
-	net.gpu_index = gpu_id;
+	net.gpu_index = cur_gpu_id;
 
 	layer l = net.layers[net.n - 1];
 	int j;
@@ -76,14 +87,14 @@ YOLODLL_API Detector::Detector(std::string cfg_filename, std::string weight_file
 	for (j = 0; j < l.classes; ++j) detector_gpu.track_id[j] = 1;
 
 #ifdef GPU
-	cudaSetDevice(old_gpu_index);
+	check_cuda( cudaSetDevice(old_gpu_index) );
 #endif
 }
 
 
 YOLODLL_API Detector::~Detector() 
 {
-	detector_gpu_t &detector_gpu = *reinterpret_cast<detector_gpu_t *>(detector_gpu_ptr.get());
+	detector_gpu_t &detector_gpu = *static_cast<detector_gpu_t *>(detector_gpu_ptr.get());
 	layer l = detector_gpu.net.layers[detector_gpu.net.n - 1];
 
 	free(detector_gpu.track_id);
@@ -99,7 +110,8 @@ YOLODLL_API Detector::~Detector()
 	int old_gpu_index;
 #ifdef GPU
 	cudaGetDevice(&old_gpu_index);
-	cudaSetDevice(detector_gpu.net.gpu_index);
+	//cudaSetDevice(detector_gpu.net.gpu_index);
+	cuda_set_device(detector_gpu.net.gpu_index);
 #endif
 
 	free_network(detector_gpu.net);
@@ -109,12 +121,12 @@ YOLODLL_API Detector::~Detector()
 #endif
 }
 
-YOLODLL_API int Detector::get_net_width() {
-	detector_gpu_t &detector_gpu = *reinterpret_cast<detector_gpu_t *>(detector_gpu_ptr.get());
+YOLODLL_API int Detector::get_net_width() const {
+	detector_gpu_t &detector_gpu = *static_cast<detector_gpu_t *>(detector_gpu_ptr.get());
 	return detector_gpu.net.w;
 }
-YOLODLL_API int Detector::get_net_height() {
-	detector_gpu_t &detector_gpu = *reinterpret_cast<detector_gpu_t *>(detector_gpu_ptr.get());
+YOLODLL_API int Detector::get_net_height() const {
+	detector_gpu_t &detector_gpu = *static_cast<detector_gpu_t *>(detector_gpu_ptr.get());
 	return detector_gpu.net.h;
 }
 
@@ -172,13 +184,15 @@ YOLODLL_API void Detector::free_image(image_t m)
 
 YOLODLL_API std::vector<bbox_t> Detector::detect(image_t img, float thresh, bool use_mean)
 {
-
-	detector_gpu_t &detector_gpu = *reinterpret_cast<detector_gpu_t *>(detector_gpu_ptr.get());
+	detector_gpu_t &detector_gpu = *static_cast<detector_gpu_t *>(detector_gpu_ptr.get());
 	network &net = detector_gpu.net;
 	int old_gpu_index;
 #ifdef GPU
 	cudaGetDevice(&old_gpu_index);
-	cudaSetDevice(net.gpu_index);
+	if(cur_gpu_id != old_gpu_index)
+		cudaSetDevice(net.gpu_index);
+
+	net.wait_stream = wait_stream;	// 1 - wait CUDA-stream, 0 - not to wait
 #endif
 	//std::cout << "net.gpu_index = " << net.gpu_index << std::endl;
 
@@ -242,15 +256,17 @@ YOLODLL_API std::vector<bbox_t> Detector::detect(image_t img, float thresh, bool
 		free(sized.data);
 
 #ifdef GPU
-	cudaSetDevice(old_gpu_index);
+	if (cur_gpu_id != old_gpu_index)
+		cudaSetDevice(old_gpu_index);
 #endif
 
 	return bbox_vec;
 }
 
-YOLODLL_API std::vector<bbox_t> Detector::tracking(std::vector<bbox_t> cur_bbox_vec, int const frames_story)
+YOLODLL_API std::vector<bbox_t> Detector::tracking_id(std::vector<bbox_t> cur_bbox_vec, bool const change_history, 
+	int const frames_story, int const max_dist)
 {
-	detector_gpu_t &det_gpu = *reinterpret_cast<detector_gpu_t *>(detector_gpu_ptr.get());
+	detector_gpu_t &det_gpu = *static_cast<detector_gpu_t *>(detector_gpu_ptr.get());
 
 	bool prev_track_id_present = false;
 	for (auto &i : prev_bbox_vec_deque)
@@ -275,7 +291,7 @@ YOLODLL_API std::vector<bbox_t> Detector::tracking(std::vector<bbox_t> cur_bbox_
 					float center_x_diff = (float)(i.x + i.w/2) - (float)(k.x + k.w/2);
 					float center_y_diff = (float)(i.y + i.h/2) - (float)(k.y + k.h/2);
 					unsigned int cur_dist = sqrt(center_x_diff*center_x_diff + center_y_diff*center_y_diff);
-					if (cur_dist < 100 && (k.track_id == 0 || dist_vec[m] > cur_dist)) {
+					if (cur_dist < max_dist && (k.track_id == 0 || dist_vec[m] > cur_dist)) {
 						dist_vec[m] = cur_dist;
 						cur_index = m;
 					}
@@ -297,8 +313,10 @@ YOLODLL_API std::vector<bbox_t> Detector::tracking(std::vector<bbox_t> cur_bbox_
 		if (cur_bbox_vec[i].track_id == 0)
 			cur_bbox_vec[i].track_id = det_gpu.track_id[cur_bbox_vec[i].obj_id]++;
 
-	prev_bbox_vec_deque.push_front(cur_bbox_vec);
-	if (prev_bbox_vec_deque.size() > frames_story) prev_bbox_vec_deque.pop_back();
+	if (change_history) {
+		prev_bbox_vec_deque.push_front(cur_bbox_vec);
+		if (prev_bbox_vec_deque.size() > frames_story) prev_bbox_vec_deque.pop_back();
+	}
 
 	return cur_bbox_vec;
 }

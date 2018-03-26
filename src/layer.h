@@ -34,12 +34,25 @@ typedef enum {
     XNOR,
     REGION,
     REORG,
+	REORG_OLD,
     BLANK
 } LAYER_TYPE;
 
 typedef enum{
     SSE, MASKED, SMOOTH
 } COST_TYPE;
+
+typedef struct {
+	int batch;
+	float learning_rate;
+	float momentum;
+	float decay;
+	int adam;
+	float B1;
+	float B2;
+	float eps;
+	int t;
+} update_args;
 
 struct layer{
     LAYER_TYPE type;
@@ -63,6 +76,7 @@ struct layer{
     int out_h, out_w, out_c;
     int n;
     int max_boxes;
+	int small_object;
     int groups;
     int size;
     int side;
@@ -83,6 +97,7 @@ struct layer{
     float exposure;
     float shift;
     float ratio;
+	int focal_loss;
     int softmax;
     int classes;
     int coords;
@@ -122,6 +137,8 @@ struct layer{
     int classfix;
     int absolute;
 
+    int onlyforward;
+    int stopbackward;
     int dontload;
     int dontloadscales;
 
@@ -239,6 +256,9 @@ struct layer{
     float * weights_gpu;
     float * weight_updates_gpu;
 
+	float * weights_gpu16;
+	float * weight_updates_gpu16;
+
     float * biases_gpu;
     float * bias_updates_gpu;
 
@@ -253,6 +273,7 @@ struct layer{
     #ifdef CUDNN
     cudnnTensorDescriptor_t srcTensorDesc, dstTensorDesc;
     cudnnTensorDescriptor_t dsrcTensorDesc, ddstTensorDesc;
+	cudnnTensorDescriptor_t normTensorDesc;
     cudnnFilterDescriptor_t weightDesc;
     cudnnFilterDescriptor_t dweightDesc;
     cudnnConvolutionDescriptor_t convDesc;

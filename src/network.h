@@ -2,6 +2,7 @@
 #ifndef NETWORK_H
 #define NETWORK_H
 
+#include <stdint.h>
 #include "layer.h"
 
 #ifdef __cplusplus
@@ -20,7 +21,7 @@ typedef struct network{
     float *workspace;
     int n;
     int batch;
-    int *seen;
+	int *seen;
     float epoch;
     int subdivisions;
     float momentum;
@@ -63,6 +64,11 @@ typedef struct network{
     #ifdef GPU
     float **input_gpu;
     float **truth_gpu;
+	float **input16_gpu;
+	float **output16_gpu;
+	size_t *max_input16_size;
+	size_t *max_output16_size;
+	int wait_stream;
     #endif
 } network;
 
